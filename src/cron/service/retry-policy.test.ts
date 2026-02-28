@@ -110,6 +110,7 @@ describe("classifyRunErrorKind", () => {
 
   it("classifies not-found model errors as terminal", () => {
     expect(classifyRunErrorKind("not found model gpt-5 in catalog")).toBe("terminal");
+    expect(classifyRunErrorKind("model not found: gpt-5")).toBe("terminal");
   });
 
   it("defaults to transient for unknown errors", () => {

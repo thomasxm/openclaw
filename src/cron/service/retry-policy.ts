@@ -71,7 +71,7 @@ const TERMINAL_PATTERNS: readonly RegExp[] = [
   /missing.*permission/i,
   /\b401\b/,
   /\b403\b/,
-  /not found.*model/i,
+  /(?:not found.*model|model not found)/i,
   /payload.*require/i,
 ];
 

@@ -822,4 +822,40 @@ describe("CronService", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("manual cron.run fires internal cron hooks", async () => {
+    const { registerInternalHook, unregisterInternalHook } =
+      await import("../hooks/internal-hooks.js");
+
+    type HookEvent = import("../hooks/internal-hooks.js").InternalHookEvent;
+    const hookEvents: Array<{ jobId: unknown; status: unknown }> = [];
+    const handler = async (event: HookEvent) => {
+      hookEvents.push({
+        jobId: event.context.jobId,
+        status: event.context.status,
+      });
+    };
+    registerInternalHook("cron:finished", handler);
+
+    try {
+      const runIsolatedAgentJob = vi.fn(async () => ({
+        status: "ok" as const,
+        summary: "manual hook test",
+      }));
+      const { store, cron } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+      const { job } = await addDefaultIsolatedAnnounceJob(cron, "manual-hook-test");
+
+      // Use manual cron.run (not timer-triggered)
+      await cron.run(job.id, "force");
+
+      expect(hookEvents.length).toBeGreaterThanOrEqual(1);
+      expect(hookEvents[0]?.jobId).toBe(job.id);
+      expect(hookEvents[0]?.status).toBe("ok");
+
+      cron.stop();
+      await store.cleanup();
+    } finally {
+      unregisterInternalHook("cron:finished", handler);
+    }
+  });
 });

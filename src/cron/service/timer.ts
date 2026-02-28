@@ -559,6 +559,7 @@ export async function runMissedJobs(
         error: result.error,
         summary: result.summary,
         delivered: result.delivered,
+        deliveryAttempted: result.deliveryAttempted,
         sessionId: result.sessionId,
         sessionKey: result.sessionKey,
         model: result.model,
@@ -831,7 +832,7 @@ export async function executeJob(
   }
 }
 
-function emitJobFinished(
+export function emitJobFinished(
   state: CronServiceState,
   job: CronJob,
   result: {
@@ -878,8 +879,8 @@ function emitJobFinished(
       nextRunAtMs: job.state.nextRunAtMs,
     },
   );
-  void triggerInternalHook(hookEvent).catch(() => {
-    /* hook errors must not break cron */
+  void triggerInternalHook(hookEvent).catch((err) => {
+    state.deps.log.warn({ err: String(err) }, "cron: internal hook trigger failed");
   });
 }
 
