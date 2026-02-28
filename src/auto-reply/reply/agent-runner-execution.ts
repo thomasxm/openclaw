@@ -366,16 +366,22 @@ export async function runAgentTurnWithFallback(params: {
                   typeof evt.data.toolCallId === "string" && evt.data.toolCallId
                     ? evt.data.toolCallId
                     : undefined;
-                toolEventChain = toolEventChain.then(async () => {
-                  if (phase === "start" || phase === "update") {
-                    await params.typingSignals.signalToolStart();
-                    await params.opts?.onToolStart?.({ name, phase, meta, toolCallId });
-                  }
-                  if (phase === "result") {
-                    const isError = evt.data.isError === true;
-                    await params.opts?.onToolEnd?.({ name, meta, isError, toolCallId });
-                  }
-                });
+                toolEventChain = toolEventChain
+                  .then(async () => {
+                    if (phase === "start" || phase === "update") {
+                      await params.typingSignals.signalToolStart();
+                      await params.opts?.onToolStart?.({ name, phase, meta, toolCallId });
+                    }
+                    if (phase === "result") {
+                      const isError = evt.data.isError === true;
+                      await params.opts?.onToolEnd?.({ name, meta, isError, toolCallId });
+                    }
+                  })
+                  .catch(() => {
+                    // Swallow per-event errors so one transient failure
+                    // (e.g. typing API timeout) does not poison the chain
+                    // and permanently disable later tool progress events.
+                  });
               }
               // Track auto-compaction completion
               if (evt.stream === "compaction") {
