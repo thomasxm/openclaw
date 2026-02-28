@@ -373,7 +373,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const toolProgressConfig = cfg.messages?.toolProgress;
   const toolProgressEnabled = toolProgressConfig?.enabled === true;
-  const slackProgressThreadTs = incomingThreadTs ?? message.ts;
+  // Honor replyToMode: only thread progress if already in a thread or mode threads replies.
+  const slackProgressThreadTs =
+    ctx.replyToMode === "off" ? incomingThreadTs : (incomingThreadTs ?? messageTs);
   const toolProgressController = createToolProgressController({
     enabled: toolProgressEnabled,
     adapter: {
@@ -405,45 +407,50 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   });
 
-  const { queuedFinal, counts } = await dispatchInboundMessage({
-    ctx: prepared.ctxPayload,
-    cfg,
-    dispatcher,
-    replyOptions: {
-      ...replyOptions,
-      skillFilter: prepared.channelConfig?.skills,
-      hasRepliedRef,
-      disableBlockStreaming: useStreaming
-        ? true
-        : typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
-      onModelSelected,
-      onPartialReply: useStreaming
-        ? undefined
-        : !previewStreamingEnabled
+  let queuedFinal: boolean;
+  let counts: { block?: number; final?: number };
+  try {
+    ({ queuedFinal, counts } = await dispatchInboundMessage({
+      ctx: prepared.ctxPayload,
+      cfg,
+      dispatcher,
+      replyOptions: {
+        ...replyOptions,
+        skillFilter: prepared.channelConfig?.skills,
+        hasRepliedRef,
+        disableBlockStreaming: useStreaming
+          ? true
+          : typeof account.config.blockStreaming === "boolean"
+            ? !account.config.blockStreaming
+            : undefined,
+        onModelSelected,
+        onPartialReply: useStreaming
           ? undefined
-          : async (payload) => {
-              updateDraftFromPartial(payload.text);
-            },
-      onAssistantMessageStart: onDraftBoundary,
-      onReasoningEnd: onDraftBoundary,
-      onToolStart: toolProgressEnabled
-        ? async (payload) => {
-            toolProgressController.onToolStart(payload.name, payload.meta);
-          }
-        : undefined,
-      onToolEnd: toolProgressEnabled
-        ? async (payload) => {
-            toolProgressController.onToolEnd(payload.name, payload.meta, payload.isError);
-          }
-        : undefined,
-    },
-  });
-  await draftStream.flush();
-  draftStream.stop();
-  await toolProgressController.cleanup();
-  markDispatchIdle();
+          : !previewStreamingEnabled
+            ? undefined
+            : async (payload) => {
+                updateDraftFromPartial(payload.text);
+              },
+        onAssistantMessageStart: onDraftBoundary,
+        onReasoningEnd: onDraftBoundary,
+        onToolStart: toolProgressEnabled
+          ? async (payload) => {
+              toolProgressController.onToolStart(payload.name, payload.meta);
+            }
+          : undefined,
+        onToolEnd: toolProgressEnabled
+          ? async (payload) => {
+              toolProgressController.onToolEnd(payload.name, payload.meta, payload.isError);
+            }
+          : undefined,
+      },
+    }));
+  } finally {
+    await draftStream.flush();
+    draftStream.stop();
+    await toolProgressController.cleanup();
+    markDispatchIdle();
+  }
 
   // -----------------------------------------------------------------------
   // Finalize the stream if one was started

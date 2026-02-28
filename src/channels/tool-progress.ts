@@ -105,6 +105,7 @@ export function createToolProgressController(params: {
   const completedTools: CompletedTool[] = [];
   let lastEditAt = 0;
   let pendingUpdate = false;
+  let flushEnqueued = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
   let chainPromise = Promise.resolve();
@@ -124,12 +125,14 @@ export function createToolProgressController(params: {
       timer = undefined;
       if (pendingUpdate && !stopped) {
         pendingUpdate = false;
+        flushEnqueued = true;
         enqueue(flushUpdate);
       }
     }, delay);
   }
 
   async function flushUpdate(): Promise<void> {
+    flushEnqueued = false;
     const text = buildStatusText({
       completed: completedTools,
       active: activeTool,
@@ -156,9 +159,14 @@ export function createToolProgressController(params: {
     if (stopped) {
       return;
     }
+    // If a flush is already enqueued but not yet executed, coalesce into it.
+    if (flushEnqueued) {
+      return;
+    }
     const elapsed = Date.now() - lastEditAt;
     if (elapsed >= throttleMs) {
       pendingUpdate = false;
+      flushEnqueued = true;
       enqueue(flushUpdate);
     } else {
       pendingUpdate = true;
