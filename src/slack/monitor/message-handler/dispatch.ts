@@ -6,6 +6,7 @@ import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
+import { createToolProgressController } from "../../../channels/tool-progress.js";
 import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
@@ -370,6 +371,40 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           }
         };
 
+  const toolProgressConfig = cfg.messages?.toolProgress;
+  const toolProgressEnabled = toolProgressConfig?.enabled === true;
+  const slackProgressThreadTs = incomingThreadTs ?? message.ts;
+  const toolProgressController = createToolProgressController({
+    enabled: toolProgressEnabled,
+    adapter: {
+      send: async (text) => {
+        const result = await ctx.app.client.chat.postMessage({
+          channel: message.channel,
+          thread_ts: slackProgressThreadTs,
+          text,
+        });
+        return result.ts;
+      },
+      edit: async (messageId, text) => {
+        await ctx.app.client.chat.update({
+          channel: message.channel,
+          ts: messageId as string,
+          text,
+        });
+      },
+      delete: async (messageId) => {
+        await ctx.app.client.chat.delete({
+          channel: message.channel,
+          ts: messageId as string,
+        });
+      },
+    },
+    config: toolProgressConfig,
+    onError: (err) => {
+      logVerbose(`slack: tool progress error: ${String(err)}`);
+    },
+  });
+
   const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: prepared.ctxPayload,
     cfg,
@@ -393,10 +428,21 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             },
       onAssistantMessageStart: onDraftBoundary,
       onReasoningEnd: onDraftBoundary,
+      onToolStart: toolProgressEnabled
+        ? async (payload) => {
+            toolProgressController.onToolStart(payload.name, payload.meta);
+          }
+        : undefined,
+      onToolEnd: toolProgressEnabled
+        ? async (payload) => {
+            toolProgressController.onToolEnd(payload.name, payload.meta, payload.isError);
+          }
+        : undefined,
     },
   });
   await draftStream.flush();
   draftStream.stop();
+  await toolProgressController.cleanup();
   markDispatchIdle();
 
   // -----------------------------------------------------------------------

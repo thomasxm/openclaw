@@ -355,9 +355,14 @@ export async function runAgentTurnWithFallback(params: {
               if (evt.stream === "tool") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
+                const meta = typeof evt.data.meta === "string" ? evt.data.meta : undefined;
                 if (phase === "start" || phase === "update") {
                   await params.typingSignals.signalToolStart();
-                  await params.opts?.onToolStart?.({ name, phase });
+                  await params.opts?.onToolStart?.({ name, phase, meta });
+                }
+                if (phase === "result") {
+                  const isError = evt.data.isError === true;
+                  await params.opts?.onToolEnd?.({ name, meta, isError });
                 }
               }
               // Track auto-compaction completion

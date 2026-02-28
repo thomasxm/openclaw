@@ -1,4 +1,5 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig, RuntimeEnv, ToolProgressConfig } from "openclaw/plugin-sdk";
+import { createToolProgressController } from "openclaw/plugin-sdk";
 import {
   buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
@@ -33,6 +34,7 @@ import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import { resolveReceiveIdType } from "./targets.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -1174,6 +1176,44 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
     });
 
+    const toolProgressConfig = cfg.messages?.toolProgress as ToolProgressConfig | undefined;
+    const toolProgressEnabled = toolProgressConfig?.enabled === true;
+    const feishuClient = createFeishuClient(account);
+    const feishuReceiveIdType = resolveReceiveIdType(ctx.chatId);
+    const toolProgressController = createToolProgressController({
+      enabled: toolProgressEnabled,
+      adapter: {
+        send: async (text) => {
+          const content = JSON.stringify({ text });
+          const response = await feishuClient.im.message.create({
+            params: { receive_id_type: feishuReceiveIdType },
+            data: {
+              receive_id: ctx.chatId,
+              content,
+              msg_type: "text",
+            },
+          });
+          return response.data?.message_id;
+        },
+        edit: async (messageId, text) => {
+          const content = JSON.stringify({ text });
+          await feishuClient.im.message.update({
+            path: { message_id: messageId as string },
+            data: { msg_type: "text", content },
+          });
+        },
+        delete: async (messageId) => {
+          await feishuClient.im.message.delete({
+            path: { message_id: messageId as string },
+          });
+        },
+      },
+      config: toolProgressConfig,
+      onError: (err) => {
+        log(`feishu[${account.accountId}]: tool progress error: ${String(err)}`);
+      },
+    });
+
     log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
     const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
       dispatcher,
@@ -1185,9 +1225,23 @@ export async function handleFeishuMessage(params: {
           ctx: ctxPayload,
           cfg,
           dispatcher,
-          replyOptions,
+          replyOptions: {
+            ...replyOptions,
+            onToolStart: toolProgressEnabled
+              ? async (payload: { name?: string; meta?: string }) => {
+                  toolProgressController.onToolStart(payload.name, payload.meta);
+                }
+              : undefined,
+            onToolEnd: toolProgressEnabled
+              ? async (payload: { name?: string; meta?: string; isError?: boolean }) => {
+                  toolProgressController.onToolEnd(payload.name, payload.meta, payload.isError);
+                }
+              : undefined,
+          },
         }),
     });
+
+    await toolProgressController.cleanup();
 
     if (isGroup && historyKey && chatHistories) {
       clearHistoryEntriesIfEnabled({
