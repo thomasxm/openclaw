@@ -293,6 +293,9 @@ export async function runAgentTurnWithFallback(params: {
             runId,
             authProfile,
           });
+          // Serializes tool event processing so a fast tool completion (result)
+          // never races ahead of a still-awaiting start/update handler.
+          let toolEventChain = Promise.resolve();
           return runEmbeddedPiAgent({
             ...embeddedContext,
             groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
@@ -352,6 +355,9 @@ export async function runAgentTurnWithFallback(params: {
               }
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
+              // Tool events are serialized through a chain so that a fast tool
+              // completion (result) never races ahead of a pending start/update,
+              // which would leave a stale ⏳ line in ToolProgressController.
               if (evt.stream === "tool") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
@@ -360,14 +366,16 @@ export async function runAgentTurnWithFallback(params: {
                   typeof evt.data.toolCallId === "string" && evt.data.toolCallId
                     ? evt.data.toolCallId
                     : undefined;
-                if (phase === "start" || phase === "update") {
-                  await params.typingSignals.signalToolStart();
-                  await params.opts?.onToolStart?.({ name, phase, meta, toolCallId });
-                }
-                if (phase === "result") {
-                  const isError = evt.data.isError === true;
-                  await params.opts?.onToolEnd?.({ name, meta, isError, toolCallId });
-                }
+                toolEventChain = toolEventChain.then(async () => {
+                  if (phase === "start" || phase === "update") {
+                    await params.typingSignals.signalToolStart();
+                    await params.opts?.onToolStart?.({ name, phase, meta, toolCallId });
+                  }
+                  if (phase === "result") {
+                    const isError = evt.data.isError === true;
+                    await params.opts?.onToolEnd?.({ name, meta, isError, toolCallId });
+                  }
+                });
               }
               // Track auto-compaction completion
               if (evt.stream === "compaction") {
